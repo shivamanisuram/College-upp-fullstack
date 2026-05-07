@@ -24,7 +24,7 @@
 | Error handling | Complete | Consistent `{ error }` responses. |
 | Layered architecture | Complete locally | Local backend has app, routes, services, data, middleware. Vercel function is self-contained for reliable deployment. |
 | PostgreSQL schema | Complete | `database/schema.sql` defines clear relationships and indexes. |
-| Hosted database | Prepared, not connected | Schema is production-ready, but live demo uses serverless in-memory seed data because no hosted Postgres credentials were provided. |
+| Hosted database | Code complete, needs credential | API now supports `DATABASE_URL`, auto-creates an indexed hosted Postgres read model, and seeds it once. Vercel currently has no `DATABASE_URL` configured. |
 | Deployment | Complete | Frontend and API deployed together on Vercel. |
 | GitHub repo | Complete | Pushed to GitHub with meaningful commits. |
 | Demo readiness | Complete | `README.md`, technical notes, schema, and audit docs explain architecture and tradeoffs. |
@@ -37,12 +37,12 @@ Verified on May 7, 2026:
 - `/api/health` returned `{ status: "ok" }`.
 - `/api/colleges?stream=Engineering&sort=placement` returned filtered college data and facets.
 
-## Remaining Production Upgrade
+## Remaining Production Step
 
-The only assignment item not fully connected in the live deployment is a hosted database. The schema is ready, and the backend is designed to move from seed data to PostgreSQL. To complete that final production step, create a hosted Postgres database on Neon, Supabase, Railway, Render, or Vercel Marketplace and add:
+The only step that requires an external credential is connecting a hosted Postgres database. The code path is implemented. To activate it on Vercel, create a hosted Postgres database on Neon, Supabase, Railway, Render, or Vercel Marketplace and add:
 
 - `DATABASE_URL`
-- migration/seed command
-- repository layer replacing the seed array
+
+After that, redeploy. The API will create `college_profiles`, add read-heavy indexes, seed the demo records once, and return `dataSource: "hosted-postgres"` from `/api/health` and listing responses.
 
 Everything else required for the MVP and demo is implemented and live.

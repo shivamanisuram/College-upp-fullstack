@@ -35,6 +35,7 @@ Database:
 - Core entities: colleges, courses, exams, users, saved colleges, reviews.
 - Relationships model many courses per college and many exams per college.
 - Indexes support read-heavy listing and filter queries.
+- The Vercel API also supports a hosted Postgres `DATABASE_URL`; when present, it creates and reads from an indexed `college_profiles` read model for the live discovery API.
 
 ## Competitive Takeaways
 
@@ -49,7 +50,7 @@ Database:
 
 ## Tradeoffs
 
-- Seed data is local for demo speed, but the API shape mirrors a PostgreSQL-backed service.
+- Seed data remains as a local fallback, but production can run against hosted Postgres through `DATABASE_URL`.
 - Saved colleges use local storage; in production they should use authenticated `saved_colleges`.
 - Filtering is in-memory now; at scale it belongs in indexed SQL plus optional OpenSearch/Meilisearch for typo-tolerant search.
 - Images are limited to a single hero asset to keep the product fast and focused.

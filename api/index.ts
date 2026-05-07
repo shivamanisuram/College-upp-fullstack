@@ -1,4 +1,5 @@
 import express from "express";
+import postgres from "postgres";
 import { z, ZodError } from "zod";
 
 const app = express();
@@ -174,14 +175,98 @@ const colleges: College[] = [
 
 const includes = (value: string, term?: string) => !term || value.toLowerCase().includes(term.toLowerCase());
 
-const getCollege = (id: string) => colleges.find((college) => college.id === id) ?? null;
+const databaseUrl = process.env.DATABASE_URL;
+const sql = databaseUrl ? postgres(databaseUrl, { max: 1, ssl: "require" }) : null;
+let databaseReady: Promise<void> | null = null;
 
-const getFacets = () => ({
-  locations: [...new Set(colleges.map((college) => college.state))].sort(),
-  streams: [...new Set(colleges.flatMap((college) => college.courses.map((course) => course.stream)))].sort(),
-  exams: [...new Set(colleges.flatMap((college) => college.exams))].sort(),
-  maxFee: Math.max(...colleges.map((college) => college.feesRange.max))
+const ensureDatabase = async () => {
+  if (!sql) return;
+  if (databaseReady) return databaseReady;
+
+  databaseReady = (async () => {
+    await sql`
+      create table if not exists college_profiles (
+        id text primary key,
+        payload jsonb not null,
+        state text not null,
+        fees_min integer not null,
+        rating numeric,
+        median_lpa numeric,
+        search_document text not null,
+        updated_at timestamptz not null default now()
+      )
+    `;
+    await sql`create index if not exists idx_college_profiles_filters on college_profiles (state, fees_min, rating, median_lpa)`;
+    await sql`create index if not exists idx_college_profiles_search on college_profiles using gin (to_tsvector('english', search_document))`;
+
+    const [{ count }] = await sql<{ count: string }[]>`select count(*)::text as count from college_profiles`;
+    if (Number(count) === 0) {
+      for (const college of colleges) {
+        await sql`
+          insert into college_profiles (id, payload, state, fees_min, rating, median_lpa, search_document)
+          values (
+            ${college.id},
+            ${sql.json(college)},
+            ${college.state},
+            ${college.feesRange.min},
+            ${college.rating},
+            ${college.placement.medianLpa},
+            ${[college.name, college.city, college.state, college.ownership, ...college.exams, ...college.decisionSignals].join(" ")}
+          )
+          on conflict (id) do update set
+            payload = excluded.payload,
+            state = excluded.state,
+            fees_min = excluded.fees_min,
+            rating = excluded.rating,
+            median_lpa = excluded.median_lpa,
+            search_document = excluded.search_document,
+            updated_at = now()
+        `;
+      }
+    }
+  })();
+
+  return databaseReady;
+};
+
+const loadColleges = async () => {
+  if (!sql) return colleges;
+
+  await ensureDatabase();
+  const rows = await sql<{ payload: College }[]>`select payload from college_profiles`;
+  return rows.map((row) => row.payload);
+};
+
+const getCollege = (source: College[], id: string) => source.find((college) => college.id === id) ?? null;
+
+const getFacets = (source: College[]) => ({
+  locations: [...new Set(source.map((college) => college.state))].sort(),
+  streams: [...new Set(source.flatMap((college) => college.courses.map((course) => course.stream)))].sort(),
+  exams: [...new Set(source.flatMap((college) => college.exams))].sort(),
+  maxFee: Math.max(...source.map((college) => college.feesRange.max))
 });
+
+const listColleges = (source: College[], query: z.infer<typeof querySchema>) => {
+  const filtered = source.filter((college) => {
+    const searchBlob = [college.name, college.city, college.state, college.ownership, ...college.exams, ...college.decisionSignals].join(" ");
+    const hasCourse = !query.stream || college.courses.some((course) => includes(course.stream, query.stream));
+
+    return (
+      includes(searchBlob, query.q) &&
+      (!query.location || includes(`${college.city} ${college.state}`, query.location)) &&
+      hasCourse &&
+      (!query.exam || college.exams.some((exam) => includes(exam, query.exam))) &&
+      (!query.maxFees || college.feesRange.min <= query.maxFees)
+    );
+  });
+
+  return [...filtered].sort((a, b) => {
+    if (query.sort === "fees") return a.feesRange.min - b.feesRange.min;
+    if (query.sort === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
+    if (query.sort === "placement") return (b.placement.medianLpa ?? 0) - (a.placement.medianLpa ?? 0);
+    return (b.rating ?? 0) + (b.placement.medianLpa ?? 0) / 10 - ((a.rating ?? 0) + (a.placement.medianLpa ?? 0) / 10);
+  });
+};
 
 const querySchema = z.object({
   q: z.string().optional(),
@@ -195,55 +280,44 @@ const querySchema = z.object({
 app.use(express.json());
 
 app.get("/api/health", (_request, response) => {
-  response.json({ data: { status: "ok", service: "college-discovery-api" } });
+  response.json({ data: { status: "ok", service: "college-discovery-api", dataSource: sql ? "hosted-postgres" : "seed-fallback" } });
 });
 
-app.get("/api/colleges", (request, response, next) => {
+app.get("/api/colleges", async (request, response, next) => {
   try {
     const query = querySchema.parse(request.query);
-    const filtered = colleges.filter((college) => {
-      const searchBlob = [college.name, college.city, college.state, college.ownership, ...college.exams, ...college.decisionSignals].join(" ");
-      const hasCourse = !query.stream || college.courses.some((course) => includes(course.stream, query.stream));
+    const source = await loadColleges();
+    const data = listColleges(source, query);
 
-      return (
-        includes(searchBlob, query.q) &&
-        (!query.location || includes(`${college.city} ${college.state}`, query.location)) &&
-        hasCourse &&
-        (!query.exam || college.exams.some((exam) => includes(exam, query.exam))) &&
-        (!query.maxFees || college.feesRange.min <= query.maxFees)
-      );
-    });
-
-    const data = [...filtered].sort((a, b) => {
-      if (query.sort === "fees") return a.feesRange.min - b.feesRange.min;
-      if (query.sort === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
-      if (query.sort === "placement") return (b.placement.medianLpa ?? 0) - (a.placement.medianLpa ?? 0);
-      return (b.rating ?? 0) + (b.placement.medianLpa ?? 0) / 10 - ((a.rating ?? 0) + (a.placement.medianLpa ?? 0) / 10);
-    });
-
-    response.json({ data, meta: { count: data.length, facets: getFacets() } });
+    response.json({ data, meta: { count: data.length, facets: getFacets(source), dataSource: sql ? "hosted-postgres" : "seed-fallback" } });
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/colleges/compare", (request, response, next) => {
+app.get("/api/colleges/compare", async (request, response, next) => {
   try {
+    const source = await loadColleges();
     const ids = z.string().transform((value) => value.split(",").filter(Boolean)).parse(request.query.ids ?? "");
-    response.json({ data: ids.map(getCollege).filter(Boolean).slice(0, 4), meta: { requested: ids.length } });
+    response.json({ data: ids.map((id) => getCollege(source, id)).filter(Boolean).slice(0, 4), meta: { requested: ids.length, dataSource: sql ? "hosted-postgres" : "seed-fallback" } });
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/colleges/:id", (request, response) => {
-  const college = getCollege(request.params.id);
-  if (!college) {
-    response.status(404).json({ error: { code: "NOT_FOUND", message: "College not found." } });
-    return;
-  }
+app.get("/api/colleges/:id", async (request, response, next) => {
+  try {
+    const source = await loadColleges();
+    const college = getCollege(source, request.params.id);
+    if (!college) {
+      response.status(404).json({ error: { code: "NOT_FOUND", message: "College not found." } });
+      return;
+    }
 
-  response.json({ data: college });
+    response.json({ data: college, meta: { dataSource: sql ? "hosted-postgres" : "seed-fallback" } });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
