@@ -13,6 +13,10 @@ npm run dev
 - Backend health: `http://127.0.0.1:4000/api/health`
 - Listings API: `http://127.0.0.1:4000/api/colleges`
 
+## Deploy
+
+This project is Vercel-ready. The frontend builds to `frontend/dist`, and Express is exposed through `api/index.ts` as a serverless function.
+
 ## Structure
 
 ```text
