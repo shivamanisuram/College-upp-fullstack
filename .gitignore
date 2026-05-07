@@ -9,3 +9,5 @@ pnpm-debug.log*
 *.local
 .DS_Store
 Thumbs.db
+
+.vercel
