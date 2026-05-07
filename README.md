@@ -41,3 +41,10 @@ docs          Technical notes and product analysis
 - Clean responsive UI.
 - Node API with validation, layered architecture, and consistent responses.
 - PostgreSQL schema for production data modeling.
+- Research/reverse-engineering doc with page architecture, granular data breakdown, data model, and competitive analysis.
+
+## Live Deployment
+
+- Product: https://files-mentioned-by-the-user-collegu.vercel.app
+- API health: https://files-mentioned-by-the-user-collegu.vercel.app/api/health
+- GitHub: https://github.com/shivamanisuram/College-upp-fullstack
